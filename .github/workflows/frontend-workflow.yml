@@ -1,0 +1,258 @@
+name: Build and Package Frontend App
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "angular-16-crud-example-master/**"
+      - ".github/workflows/frontend-workflow.yml"
+      - "!README.md"
+      - "!angular-16-crud-example-master/README.md"
+      
+jobs:
+  # sast:
+  #   name: Snyk SAST
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@master
+  #     - name: Install Snyk CLI
+  #       run: npm install -g snyk
+  #     - name: Run Snyk to check for vulnerabilities
+  #       run: |
+  #         cd angular-16-crud-example-master
+  #         npm install
+  #         snyk auth ${{ secrets.SNYK_TOKEN }}
+  #         mkdir -p reports
+  #         snyk code test --json-file-output=reports/snyk_sast_report.json || true
+  #     - name: Upload Snyk Report as Artifact
+  #       uses: actions/upload-artifact@v3
+  #       with:
+  #         name: snyk_sast_report
+  #         path: angular-16-crud-example-master/reports
+  # sast:
+  #   name: SonarCloud SAST
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v3
+  #       with:
+  #         fetch-depth: 0 
+  #     - name: SonarCloud Scan
+  #       uses: SonarSource/sonarcloud-github-action@master
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUBTOKEN }}  
+  #         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  #       with:
+  #         projectBaseDir: angular-16-crud-example-master/
+  sast:
+    name: SonarCloud SAST
+    if: "contains(github.event.head_commit.message,'run workflow')"
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+    - name: Install Sonar Scanner
+      run: cd angular-16-crud-example-master && npm install -g sonarqube-scanner
+    - name: SonarCloud Scan
+      run: |
+        cd angular-16-crud-example-master 
+        sonar-scanner \
+          -Dsonar.sources=src \
+          -Dsonar.host.url=https://sonarcloud.io \
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+    - name: Upload SonarCloud Report as Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: sonarcloud_sast_report
+        path: angular-16-crud-example-master/.scannerwork/report-task.txt
+    - name: Upload Artifacts to DefectDojo
+      run: |
+          curl -X POST https://2f6a-105-74-3-141.ngrok-free.app//api/v2/import-scan/ \
+          -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" \
+          -F "engagement=7" \
+          -F "verified=true" \
+          -F "active=true" \
+          -F "lead=1" \
+          -F "tags=test" \
+          -F "scan_type=SonarQube Scan" \
+          -F "minimum_severity=Info" \
+          -F "skip_duplicates=true" \
+          -F "close_old_findings=false" \
+          -F "file=@angular-16-crud-example-master/.scannerwork/report-task.txt"
+
+  sca:
+    name: Snyk SCA
+    if: "contains(github.event.head_commit.message,'run workflow')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+      - name: Run Snyk to check for vulnerabilities
+        run: |
+          cd angular-16-crud-example-master
+          mkdir -p reports
+          npm install
+          snyk auth ${{ secrets.SNYK_TOKEN }}
+          snyk test --severity-threshold=high --json > reports/snyk_sca_report.json --file=package.json || true
+          snyk monitor
+      - name: Upload Snyk Report as Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: snyk_sca_report
+          path: angular-16-crud-example-master/reports
+          
+      - name: Upload Artifacts to DefectDojo
+        run: |
+          curl -X POST https://2f6a-105-74-3-141.ngrok-free.app//api/v2/import-scan/ \
+          -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" \
+          -F "engagement=7" \
+          -F "verified=true" \
+          -F "active=true" \
+          -F "lead=1" \
+          -F "tags=test" \
+          -F "scan_type=Snyk Scan" \
+          -F "minimum_severity=Info" \
+          -F "skip_duplicates=true" \
+          -F "close_old_findings=false" \
+          -F "file=@angular-16-crud-example-master/reports/snyk_sca_report.json"
+  node-build:
+    needs: [sast,sca]
+    uses: ./.github/workflows/angular-build.yaml
+    with:
+      directory: "angular-16-crud-example-master"
+      artifact-name: "dist"
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: node-build
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+      - name: Download dist folder
+        uses: actions/download-artifact@v3
+        with:
+          name: dist
+          path: angular-16-crud-example-master/dist
+      - name: Extract image version
+        uses: ./actions/image-version-action
+      - name: Build Docker image
+        run: cd angular-16-crud-example-master && docker build -t elmazidi/myapp-frontend:${{ env.version }} .
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+      - name: Run Snyk to check for vulnerabilities
+        run: |
+          cd angular-16-crud-example-master
+          mkdir -p reports
+          npm install
+          snyk auth ${{ secrets.SNYK_TOKEN }}
+          snyk container test elmazidi/myapp-frontend:${{ env.version }} --json-file-output=reports/container_report.json
+          snyk container monitor elmazidi/myapp-frontend:${{ env.version }}
+      - name: Upload Artifacts to DefectDojo
+        run: |
+          curl -X POST https://2f6a-105-74-3-141.ngrok-free.app//api/v2/import-scan/ \
+          -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" \
+          -F "engagement=7" \
+          -F "verified=true" \
+          -F "active=true" \
+          -F "lead=1" \
+          -F "tags=test" \
+          -F "scan_type=Snyk Scan" \
+          -F "minimum_severity=Info" \
+          -F "skip_duplicates=true" \
+          -F "close_old_findings=false" \
+          -F "file=@angular-16-crud-example-master/reports/container_report.json"
+
+      - name: Upload Snyk Report as Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: container_report
+          path: angular-16-crud-example-master/reports
+      - name: Log in to Docker Hub
+        run: docker login -u elmazidi -p ${{ secrets.DOCKER_PASSWORD }}
+      - name: Build and push frontend Docker image
+        run: docker push elmazidi/myapp-frontend:${{ env.version }}
+      - name: Share image version with the next Job
+        id: extract-version
+        run: echo "version=${{ env.version }}" >> "$GITHUB_OUTPUT"
+  dast:
+    needs: docker-build
+    name: OWASP ZAP DAST
+    runs-on: ubuntu-latest
+    outputs:
+     version: ${{ steps.extract-version.outputs.version }}
+    services:
+      frontend:
+        image: elmazidi/myapp-frontend:${{needs.docker-build.outputs.version}}
+        ports:
+          - 4200:80
+    steps:
+     - name: Test Service Availability
+       run: |
+        # Wait for the service to be ready
+        while ! curl -s http://localhost:4200/ >/dev/null; do
+          echo "Waiting for the service to be available..."
+          sleep 5
+        done
+        echo "Service is now available."
+     - name: ZAP Scan
+       uses: zaproxy/action-baseline@v0.6.1
+       with:
+        docker_name: 'owasp/zap2docker-stable'
+        target: 'http://localhost:4200/'
+        rules_file_name: '.zap/rules.tsv'
+        cmd_options: '-J report_json -a'
+     - name: Upload Artifacts to DefectDojo
+       run: |
+          curl -X POST https://2f6a-105-74-3-141.ngrok-free.app//api/v2/import-scan/ \
+          -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" \
+          -F "engagement=7" \
+          -F "verified=true" \
+          -F "active=true" \
+          -F "lead=1" \
+          -F "tags=test" \
+          -F "scan_type=ZAP Scan" \
+          -F "minimum_severity=Info" \
+          -F "skip_duplicates=true" \
+          -F "close_old_findings=false" \
+          -F "file=@report_json.json"
+     - name: Save ZAP Report
+       run: mkdir -p reports && mv report_json.json reports/dast_report.json
+     - name: Upload ZAP Report as Artifact
+       uses: actions/upload-artifact@v2
+       with:
+        name: zap_dast_report
+        path: reports
+     - name: Share image version with the next Job
+       id: extract-version
+       run: echo "version=:${{needs.docker-build.outputs.version}}" >> "$GITHUB_OUTPUT"
+     
+  gitops-k8s-deploy:
+    runs-on: ubuntu-latest
+    needs: dast
+    steps:
+      - name: Configure Git
+        run: |
+          git config --global user.email "ilyasselmazidi123@gmail.com"
+          git config --global user.name "ELMILYASS"
+      - name: Clone the Git repository containing the K8s cluster's configuration files.
+        run: git clone https://github.com/ELMILYASS/K8sClusterDevopsProject.git
+      - name: Update deployment version
+        run: cd K8sClusterDevopsProject/dev && sed -i "s/myapp-frontend:.*/myapp-frontend:${{needs.dast.outputs.version}}/g" frontend-app.yaml
+      - name: Display updated deployment file
+        run: cd K8sClusterDevopsProject/dev && cat frontend-app.yaml
+
+      - name: Commit changes
+        run: |
+          cd K8sClusterDevopsProject
+          git add .
+          git commit -m "frontend version ${{needs.docker-build.outputs.version}}"
+
+      - name: Set Git remote URL
+        run: cd K8sClusterDevopsProject && git remote set-url origin https://ELMILYASS:${{ secrets.GITHUBTOKEN }}@github.com/ELMILYASS/K8sClusterDevopsProject.git
+      - name: Push changes to Github
+        run: cd K8sClusterDevopsProject && git push -uf origin main

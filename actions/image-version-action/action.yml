@@ -1,0 +1,15 @@
+name: "Docker Image Version"
+description: "Getting version from commit message"
+runs:
+  using: "composite"
+  steps:
+    - name: Extract version from commit message
+      id: extract-version
+      run: |
+        version=$(echo ${{ github.event.head_commit.message }} | grep -oP 'tag:[^\s]+' | cut -d':' -f2)
+        if [ -z "$version" ]; then
+          echo "version=latest" >> $GITHUB_ENV
+        else
+          echo "version=$version" >> $GITHUB_ENV
+        fi
+      shell: bash

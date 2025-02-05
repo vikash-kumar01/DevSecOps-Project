@@ -1,0 +1,19 @@
+# Ignore les fichiers de configuration spécifiques aux IDE
+.idea
+.vscode
+
+# Ignore les fichiers générés par Maven
+# /target/
+
+# Ignore les fichiers de sauvegarde
+*~
+
+# Ignore les fichiers de cache et de compilation Java
+*.class
+*.jar
+
+# Ignore les fichiers spécifiques aux tests
+/test/
+
+# Ignore les fichiers de dépendances téléchargés par Maven
+.m2/
